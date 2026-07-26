@@ -1,0 +1,27 @@
+[project]
+name = "bornwave"
+version = "0.2.0"
+description = "PyTorch Convergent Born Series Helmholtz solver with heterogeneous sound speed, density and absorption"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.4.0,<2.11",
+    "numpy",
+    "scipy>=1.15.3",
+    "matplotlib>=3.10.9",
+]
+
+[project.optional-dependencies]
+test = ["scipy", "matplotlib", "pytest"]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+
+[tool.setuptools.packages.find]
+include = ["bornwave*"]

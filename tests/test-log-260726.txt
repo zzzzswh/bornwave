@@ -1,0 +1,104 @@
+ + python-dateutil==2.9.0.post0
+ + scipy==1.18.0
+ + six==1.17.0
+wuheng@dhale:~/dev/project/bornwave$ uv run tests/test_operator_identity.py
+max |M_fwd @ M_inv - I| = 8.968e-16
+max |M_fwd^H @ M_inv^H - I| = 1.378e-15
+max |ell^H + ell| = 0.000e+00  (skew-Hermitian check)
+operator identity tests passed
+wuheng@dhale:~/dev/project/bornwave$ uv run tests/test_homogeneous_hankel.py
+padded grid (240, 240), a1=8.167e+02+3.142e+05j, a2=2.727e-10+1.396e-07j, lam1=6.605e+05, lam2=2.937e-07
+iterations=275  rel_increment=5.51e-07  rel_residual=6.18e-06  wall=1.6s
+rel L2 error: +iwt(H2)=8.940e-05  -iwt(H1)=1.432e+00
+best convention: +iwt;  lsq scale |s|=1.0000 arg(s)=-0.00 deg
+homogeneous Hankel test passed (convention: +iwt)
+wuheng@dhale:~/dev/project/bornwave$ uv run tests/test_heterogeneous_reciprocity.py
+iterations=5500  rel_increment=9.77e-07  rel_residual=8.07e-06  wall=46.8s  batch p shape=(2, 128, 128)
+p(B|A) = -1.455957e-06+1.914637e-06j
+p(A|B) = -1.455950e-06+1.914633e-06j
+reciprocity relative error = 3.238e-06
+heterogeneous reciprocity test passed
+wuheng@dhale:~/dev/project/bornwave$ uv run examples/two_layer_ricker.py
+two-layer model 176x240, dx=7.5 m, interface z=746.25 m, h=596.25 m, 73 receivers
+/home/wuheng/dev/project/bornwave/bornwave/synthesis.py:99: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writab
+  H[k] = res.p[rec_z, rec_x].cpu().numpy()
+  [  1/73] f=  0.65 Hz  iters=  150  residual=3.5e-05  elapsed=   0.8s
+  [  2/73] f=  1.30 Hz  iters=  225  residual=4.0e-05  elapsed=   1.6s
+  [  3/73] f=  1.95 Hz  iters=  250  residual=8.8e-05  elapsed=   2.4s
+  [  4/73] f=  2.60 Hz  iters=  325  residual=1.2e-04  elapsed=   3.4s
+  [  5/73] f=  3.26 Hz  iters=  350  residual=1.7e-04  elapsed=   4.6s
+  [  6/73] f=  3.91 Hz  iters=  350  residual=2.3e-04  elapsed=   5.7s
+  [  7/73] f=  4.56 Hz  iters=  350  residual=2.9e-04  elapsed=   6.9s
+  [  8/73] f=  5.21 Hz  iters=  350  residual=3.3e-04  elapsed=   8.0s
+  [  9/73] f=  5.86 Hz  iters=  375  residual=3.7e-04  elapsed=   9.3s
+  [ 10/73] f=  6.51 Hz  iters=  400  residual=4.2e-04  elapsed=  10.6s
+  [ 11/73] f=  7.16 Hz  iters=  400  residual=5.5e-04  elapsed=  11.9s
+  [ 12/73] f=  7.81 Hz  iters=  425  residual=6.0e-04  elapsed=  13.3s
+  [ 13/73] f=  8.46 Hz  iters=  450  residual=6.5e-04  elapsed=  14.8s
+  [ 14/73] f=  9.11 Hz  iters=  475  residual=7.0e-04  elapsed=  16.3s
+  [ 15/73] f=  9.77 Hz  iters=  500  residual=7.4e-04  elapsed=  17.9s
+  [ 16/73] f= 10.42 Hz  iters=  500  residual=9.8e-04  elapsed=  19.6s
+  [ 17/73] f= 11.07 Hz  iters=  525  residual=1.0e-03  elapsed=  21.2s
+  [ 18/73] f= 11.72 Hz  iters=  550  residual=1.1e-03  elapsed=  23.0s
+  [ 19/73] f= 12.37 Hz  iters=  575  residual=1.1e-03  elapsed=  24.8s
+  [ 20/73] f= 13.02 Hz  iters=  600  residual=1.2e-03  elapsed=  26.7s
+  [ 21/73] f= 13.67 Hz  iters=  625  residual=1.2e-03  elapsed=  28.8s
+  [ 22/73] f= 14.32 Hz  iters=  625  residual=1.5e-03  elapsed=  30.8s
+  [ 23/73] f= 14.97 Hz  iters=  650  residual=1.6e-03  elapsed=  32.9s
+  [ 24/73] f= 15.62 Hz  iters=  675  residual=1.6e-03  elapsed=  35.4s
+  [ 25/73] f= 16.28 Hz  iters=  700  residual=1.6e-03  elapsed=  37.8s
+  [ 26/73] f= 16.93 Hz  iters=  725  residual=1.7e-03  elapsed=  40.2s
+  [ 27/73] f= 17.58 Hz  iters=  725  residual=2.1e-03  elapsed=  42.5s
+  [ 28/73] f= 18.23 Hz  iters=  750  residual=2.1e-03  elapsed=  44.9s
+  [ 29/73] f= 18.88 Hz  iters=  775  residual=2.1e-03  elapsed=  47.5s
+  [ 30/73] f= 19.53 Hz  iters=  800  residual=2.1e-03  elapsed=  50.1s
+  [ 31/73] f= 20.18 Hz  iters=  825  residual=2.1e-03  elapsed=  52.8s
+  [ 32/73] f= 20.83 Hz  iters=  825  residual=2.6e-03  elapsed=  55.5s
+  [ 33/73] f= 21.48 Hz  iters=  850  residual=2.6e-03  elapsed=  58.4s
+  [ 34/73] f= 22.14 Hz  iters=  875  residual=2.6e-03  elapsed=  61.2s
+  [ 35/73] f= 22.79 Hz  iters=  900  residual=2.6e-03  elapsed=  64.2s
+  [ 36/73] f= 23.44 Hz  iters=  925  residual=2.6e-03  elapsed=  67.2s
+  [ 37/73] f= 24.09 Hz  iters=  925  residual=3.2e-03  elapsed=  70.2s
+  [ 38/73] f= 24.74 Hz  iters=  950  residual=3.1e-03  elapsed=  73.3s
+  [ 39/73] f= 25.39 Hz  iters=  975  residual=3.1e-03  elapsed=  76.5s
+  [ 40/73] f= 26.04 Hz  iters= 1000  residual=3.1e-03  elapsed=  79.8s
+  [ 41/73] f= 26.69 Hz  iters= 1000  residual=3.7e-03  elapsed=  83.0s
+  [ 42/73] f= 27.34 Hz  iters= 1025  residual=3.7e-03  elapsed=  86.3s
+  [ 43/73] f= 27.99 Hz  iters= 1050  residual=3.7e-03  elapsed=  89.6s
+  [ 44/73] f= 28.65 Hz  iters= 1075  residual=3.7e-03  elapsed=  93.0s
+  [ 45/73] f= 29.30 Hz  iters= 1075  residual=4.4e-03  elapsed=  96.4s
+  [ 46/73] f= 29.95 Hz  iters= 1100  residual=4.3e-03  elapsed=  99.8s
+  [ 47/73] f= 30.60 Hz  iters= 1125  residual=4.3e-03  elapsed= 103.4s
+  [ 48/73] f= 31.25 Hz  iters= 1150  residual=4.2e-03  elapsed= 107.0s
+  [ 49/73] f= 31.90 Hz  iters= 1150  residual=5.0e-03  elapsed= 110.5s
+  [ 50/73] f= 32.55 Hz  iters= 1175  residual=4.9e-03  elapsed= 114.1s
+  [ 51/73] f= 33.20 Hz  iters= 1200  residual=4.9e-03  elapsed= 117.8s
+  [ 52/73] f= 33.85 Hz  iters= 1225  residual=4.8e-03  elapsed= 121.7s
+  [ 53/73] f= 34.51 Hz  iters= 1250  residual=4.8e-03  elapsed= 125.6s
+  [ 54/73] f= 35.16 Hz  iters= 1250  residual=5.6e-03  elapsed= 129.4s
+  [ 55/73] f= 35.81 Hz  iters= 1275  residual=5.5e-03  elapsed= 133.3s
+  [ 56/73] f= 36.46 Hz  iters= 1300  residual=5.4e-03  elapsed= 137.3s
+  [ 57/73] f= 37.11 Hz  iters= 1325  residual=5.4e-03  elapsed= 141.5s
+  [ 58/73] f= 37.76 Hz  iters= 1325  residual=6.2e-03  elapsed= 145.5s
+  [ 59/73] f= 38.41 Hz  iters= 1350  residual=6.1e-03  elapsed= 149.6s
+  [ 60/73] f= 39.06 Hz  iters= 1375  residual=6.1e-03  elapsed= 153.8s
+  [ 61/73] f= 39.71 Hz  iters= 1400  residual=6.0e-03  elapsed= 158.0s
+  [ 62/73] f= 40.36 Hz  iters= 1400  residual=6.9e-03  elapsed= 162.2s
+  [ 63/73] f= 41.02 Hz  iters= 1425  residual=6.8e-03  elapsed= 166.6s
+  [ 64/73] f= 41.67 Hz  iters= 1450  residual=6.7e-03  elapsed= 171.0s
+  [ 65/73] f= 42.32 Hz  iters= 1475  residual=6.6e-03  elapsed= 175.5s
+  [ 66/73] f= 42.97 Hz  iters= 1475  residual=7.6e-03  elapsed= 180.0s
+  [ 67/73] f= 43.62 Hz  iters= 1500  residual=7.5e-03  elapsed= 184.6s
+  [ 68/73] f= 44.27 Hz  iters= 1525  residual=7.3e-03  elapsed= 189.3s
+  [ 69/73] f= 44.92 Hz  iters= 1550  residual=7.2e-03  elapsed= 193.9s
+  [ 70/73] f= 45.57 Hz  iters= 1550  residual=8.3e-03  elapsed= 198.6s
+  [ 71/73] f= 46.22 Hz  iters= 1575  residual=8.1e-03  elapsed= 203.3s
+  [ 72/73] f= 46.88 Hz  iters= 1600  residual=8.0e-03  elapsed= 208.2s
+  [ 73/73] f= 47.53 Hz  iters= 1625  residual=7.9e-03  elapsed= 213.1s
+73 frequencies in [0.65, 47.53] Hz, total iterations 67575, wall 213s
+direct-wave window rel L2: mean=7.511e-04 max=1.806e-03
+zero-offset reflection: alpha=0.5710 vs R0=0.5714 (0.08% off)
+AVO |alpha - R(theta)|/R0 over |x|<=600 m: mean=1.323e-03 max=5.387e-03
+moveout |dt|: mean=0.56 ms max=1.29 ms;  fitted h=596.3 m (model 596.25 m)
+saved /home/wuheng/dev/project/bornwave/examples/two_layer_ricker.png
+two-layer Ricker validation passed
