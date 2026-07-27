@@ -11,6 +11,10 @@ from .grid import next_fast_len
 from .analytic import pressure_point_source_2d, fluid_reflection_coefficient
 from .synthesis import ricker, band_indices, synthesize_shot
 from .autograd import solve_helmholtz, HelmholtzDiagSolve
+from .engine import CBSFreqShotBatch2D
+from .api import acoustic2d, AcousticResult
+from .viz import trace_norm, plot_shot, plot_wavefield_video
+from .timesynth import time_slices_from_band
 
 __all__ = [
     "CBSSolver2D",
@@ -23,5 +27,12 @@ __all__ = [
     "ricker",
     "band_indices",
     "synthesize_shot",
+    "CBSFreqShotBatch2D",
+    "acoustic2d",
+    "AcousticResult",
+    "trace_norm",
+    "plot_shot",
+    "plot_wavefield_video",
+    "time_slices_from_band",
 ]
-__version__ = "0.2.0"
+__version__ = "0.3.0"

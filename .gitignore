@@ -13,5 +13,7 @@ wheels/
 
 *.png
 *.npz
-
-*.tar*
+*.mp4
+*.gif
+!docs/*.png
+!docs/*.gif

@@ -1,89 +1,260 @@
 # bornwave
 
-PyTorch 实现的改进收敛 Born 级数（CBS）频域声波求解器，支持**任意非均匀速度、密度与吸收**，面向地震勘探 / 声波方程模拟。算法来自 Stanziola, Arridge, Treeby & Cox, *Iterative Born solver for the acoustic Helmholtz equation with heterogeneous sound speed and density* (arXiv:2507.16087)，其核心是 Vettenburg & Vellekoop 的 universal split-preconditioner (arXiv:2207.14222) 作用在一阶声学方程组上。
+**GPU acoustic wave simulation without time stepping** — a matrix-free
+Convergent Born Series (CBS) solver for the acoustic Helmholtz equation with
+**arbitrary heterogeneous sound speed, density and attenuation**, written in
+PyTorch. One call gives you shot records, full wavefield movies, and (via the
+adjoint-state autograd) FWI gradients.
 
-矩阵自由、无预处理开销，每步迭代只有「逐点乘加 → 3 场批量 FFT → 每 k 点 3×3 einsum → 批量 IFFT → 逐点乘加」，天然适合 GPU 与炮批量。
+<!--
+Showcase assets: run `python examples/demo_engine.py`, then
 
-## 当前状态（v0.2，阶段 0–4）
+    mkdir -p docs
+    cp examples/demo_shot_p.png docs/
+    ffmpeg -i examples/demo_wavefield.mp4 \
+      -vf "fps=12,scale=720:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" \
+      -loop 0 docs/demo_wavefield.gif
 
-- 2D 单频求解器：交错网格一阶系统 `[u_x, u_z, p]`，多项式斜坡 sponge 吸收层，FFT 友好网格尺寸（2/3/5/7 小素数积）
-- 变密度：`ρ0` 线性插值到半格点（论文式 39），交错相位 `e^{±ik∆/2}` 进入 `(L+I)^{-1}` 符号（附录 B 式 44 的 2D 版）
-- 炮批量：源可带任意前导 batch 维，形状 `(B, 3, Nz, Nx)` 一次迭代同推所有炮（算子张量全部共享）
-- **多频合成（阶段 4）**：`synthesize_shot` = Ricker 子波 `rfft` 分解 → 有效频带（|W|≥阈值）逐频 Helmholtz 求解 → `irfft` 合成时间域道集
-- 复移位 `a1, a2` 用逐分量中位数近似最小包围圆圆心；`λ = max|d−a|/β`，`β=0.95`
-- 真残差 `‖y−Ax‖/‖y‖` 用独立装配的前向符号核验（非迭代自证）
+For a playable MP4 with sound controls, open this file in GitHub's web
+editor and drag examples/demo_wavefield.mp4 straight into it — GitHub
+hosts the video and inserts an embedded player.
+-->
 
-### 验证（tests/，全部通过）
-
-| 测试 | 结果 |
-|---|---|
-| `(L+I) @ (L+I)^{-1} = I` 逐 k 点 | 9e-16 |
-| 伴随符号、微分块斜厄米性 | 1e-15 / 0 |
-| 均匀介质 vs 解析 Hankel 格林函数（160²内域，10 ppw） | 相对 L2 误差 **8.9e-5**，振幅比 1.0000，相位偏差 0.00° |
-| 强对比圆盘（2× 速度，2.5× 密度）声学互易性 | **3.2e-6**（complex64 下机器精度级） |
-| 两层模型 + 15 Hz Ricker 道集：直达波窗口 vs 解析 Hankel | 平均 0.075%，最大 **0.18%** |
-| 零偏移距反射振幅 vs 法向 Zoeppritz R₀=0.5714 | **0.08%** |
-| AVO 曲线（0–600 m 偏移距）vs 流体 Zoeppritz R(θ) | 最大 0.54% |
-| 反射时距曲线 / 反演界面深度 | ≤1.3 ms（<1 采样）/ 596.3 vs 596.25 m |
-
-### 实测确定的四个约定（写代码前容易踩的坑）
-
-1. **时间约定是 `+iωt`（H0⁽²⁾ 分支）**，即论文式 (5) 按字面 `+iω` 实现后，恰好等于 numpy/torch FFT 的传递函数约定：多频合成 `d(t) = irfft(W(f)·H(f))` **不需要任何共轭翻转**。
-2. **2D 点源归一化就是 `幅值/dx²`**（谱方法下单格点=单位积分 sinc），实测振幅比 1.0000——论文里的 `2c0/dx` 修正是 1D 专用，2D 不需要。
-3. **交错网格下 `(L+I)^{-1}` 逐 k 点矩阵不对称**（S 与 S̄ 相位），论文式 (34) 的"伴随=逐元素共轭"只对非交错版成立；交错版伴随符号是逐 k 点**共轭转置**（计算同样免费，见 `test_operator_identity.py`）。
-4. **掠射海绵虚象**：炮检线离吸收层太近（如 60 m）时，直达波沿顶部海绵掠射的残余反射与直达波无法分窗，大偏移距误差可达 5%；把测线放到 ~λ_dom 深（150 m）并用 60 点海绵后降到 0.18%。与时间域 FDM 的吸收边界掠射问题同源，做地表观测系统时要留意。
-
-## 快速上手
+<p align="center">
+  <img src="docs/demo_wavefield.gif" width="70%" alt="pressure wavefield movie: two-layer model with a low-velocity lens"/>
+</p>
+<p align="center">
+  <img src="docs/demo_shot_p.png" width="45%" alt="trace-normalized pressure shot record"/>
+  <br/>
+  <em>Two-layer model with a low-velocity lens: pressure wavefield movie and shot record,
+  produced by <code>examples/demo_engine.py</code> in one call.</em>
+</p>
 
 ```python
-import torch, numpy as np
-from bornwave import CBSSolver2D, point_source_2d
-
-n, dx, f = 256, 3.0, 50.0
-omega = 2 * np.pi * f
-c0   = torch.full((n, n), 1500.)   # 任意 2D 速度模型
-rho0 = torch.full((n, n), 1000.)   # 任意 2D 密度模型
-
-solver = CBSSolver2D(c0, rho0, omega, dx, alpha=0.0,
-                     abs_points=40, dtype=torch.complex64, device="cpu")
-
-# 单炮或炮批量：sp 形状 (nz,nx) 或 (B,nz,nx)
-sp = torch.stack([point_source_2d(n, n, 20, ix, dx) for ix in (64, 128, 192)])
-res = solver.solve(sp=sp, tol=1e-6)
-
-res.p, res.ux, res.uz        # (B, nz, nx)，u 在半格点
-res.iterations, res.rel_residual
-```
-
-地震 Q 模型：`alpha = alpha_from_Q(omega, c0, Q)`。
-
-### 时间域道集（多频合成）
-
-```python
-from bornwave import synthesize_shot
 import numpy as np
+from bornwave import acoustic2d, trace_norm, plot_shot, plot_wavefield_video
 
-out = synthesize_shot(c0, rho0, dx,
-                      src=(20, 120),            # (iz, ix)
-                      rec_z=20, rec_x=np.arange(12, 229, 3),
-                      nt=768, dt=2e-3, f0=15.0, # 15 Hz Ricker（可传自定义 wavelet）
-                      tol=2e-4, abs_points=60)
-out["gather"]        # (nt, nrec) 时间域道集
-out["H"]             # 单位源传递函数 (nfreq, nrec)，可复用换子波零成本
+nz, nx = 300, 400                        # arrays are (nz, nx): vp[z, x]
+dh, dt, nt, f0 = 10.0, 1e-3, 2000, 15.0
+vp  = np.full((nz, nx), 2500.0); vp[180:]  = 3200.0
+rho = np.full((nz, nx), 2000.0); rho[180:] = 2300.0
+
+res = acoustic2d(vp, rho, dh, dt, nt, f0,
+                 sx=[nx // 2], sz=[10],            # multi-shot: pass lists,
+                 rx=np.arange(0, nx, 2), rz=10,    # solved as one batch
+                 nbc=60, snap_interval=25)
+
+res.seis_p, res.seis_vx, res.seis_vz     # (nt, nrec) time-domain records
+res.snaps                                 # (nsnap, nz, nx) wavefield movie
+res.H_p                                   # unit-source transfer functions:
+res.resynthesize(other_wavelet)           #   swap wavelets at zero cost
+res.stats.kernel_time_s                   # timing / iteration diagnostics
+
+plot_shot(trace_norm(res.seis_p), "shot.png", dt=dt)
+plot_wavefield_video(res.snaps, "wavefield.mp4", fps=12, dh=dh,
+                     snap_times=res.snap_times, adaptive_clims=True, model=vp)
 ```
 
-时间约定已实测对齐 torch/numpy FFT（`+iωt`），合成端不需要共轭。完整两层模型验证（直达波、Zoeppritz AVO、时距曲线）见 `examples/two_layer_ricker.py`。
+## Theory
 
-## 路线图
+This repository is an independent PyTorch implementation of the algorithm of
+**Stanziola, Arridge, Treeby & Cox (2025)**: the universal split
+preconditioner of **Vettenburg & Vellekoop (2022)** applied to the
+first-order acoustic system `[u_x, u_z, p]` on a staggered Fourier grid,
+which extends the original convergent Born series of **Osnabrugge,
+Leedumrongwatthanakun & Vellekoop (2016)** to heterogeneous sound speed
+**and density** with absorption. All algorithmic credit belongs to those
+papers; implementation choices, the engine layer, and any bugs are ours.
 
-- [ ] Anderson 2D 流体圆柱散射解析解对比（变密度路径的解析级验证）
-- [ ] 频率批量 `(B_freq, B_shot, 3, Nz, Nx)` + 收敛掩码 / 频段分桶调度
-- [ ] 隐函数定理 `torch.autograd.Function`：forward 收敛迭代 + backward 伴随解（共轭转置符号已就位），显存 O(1) → FWI
-- [x] 多频合成层（v0.2）；剩余：与时间域 FDM（Julia 交错网格+HABC）trace 级交叉验证
-- [ ] `torch.compile` 融合逐点链 + CUDA graph 捕获主循环；`(L+I)^{-1}` 存/现算按显存自动切换
-- [ ] Osnabrugge 2021 超薄吸收边界层
-- [ ] 3D（4 场，每步 8 个 FFT）
+- A. Stanziola, S. R. Arridge, B. T. Treeby, B. T. Cox,
+  *Iterative Born solver for the acoustic Helmholtz equation with
+  heterogeneous sound speed and density*,
+  [arXiv:2507.16087](https://arxiv.org/abs/2507.16087) (2025).
+- T. Vettenburg, I. M. Vellekoop,
+  *A universal matrix-free split preconditioner for the fixed-point
+  iterative solution of non-symmetric linear systems*,
+  [arXiv:2207.14222](https://arxiv.org/abs/2207.14222) (2022).
+- G. Osnabrugge, S. Leedumrongwatthanakun, I. M. Vellekoop,
+  *A convergent Born series for solving the inhomogeneous Helmholtz equation
+  in arbitrarily large media*, J. Comput. Phys. **322** (2016) 113–124.
 
-## 依赖
+<details>
+<summary>BibTeX</summary>
 
-`torch`（CPU 或 CUDA 均可）、`numpy`；验证与示例另
+```bibtex
+@misc{stanziola2025iterativeborn,
+  title         = {Iterative Born solver for the acoustic Helmholtz equation
+                   with heterogeneous sound speed and density},
+  author        = {Stanziola, Antonio and Arridge, Simon R. and
+                   Treeby, Bradley E. and Cox, Ben T.},
+  year          = {2025},
+  eprint        = {2507.16087},
+  archivePrefix = {arXiv},
+  primaryClass  = {physics.comp-ph}
+}
+@misc{vettenburg2022universal,
+  title         = {A universal matrix-free split preconditioner for the
+                   fixed-point iterative solution of non-symmetric linear systems},
+  author        = {Vettenburg, Tom and Vellekoop, Ivo M.},
+  year          = {2022},
+  eprint        = {2207.14222},
+  archivePrefix = {arXiv},
+  primaryClass  = {math.NA}
+}
+@article{osnabrugge2016convergent,
+  title   = {A convergent {Born} series for solving the inhomogeneous
+             {Helmholtz} equation in arbitrarily large media},
+  author  = {Osnabrugge, Gerwin and Leedumrongwatthanakun, Saroch and
+             Vellekoop, Ivo M.},
+  journal = {Journal of Computational Physics},
+  volume  = {322},
+  pages   = {113--124},
+  year    = {2016}
+}
+```
+</details>
+
+Despite the name, this is a **full-wave** solver: "Born" refers to the form
+of the iterative series, not to the first-order Born approximation. The
+converged solution satisfies the heterogeneous Helmholtz system exactly (to
+the true residual, which is verified with an independently assembled forward
+operator, not the iteration's own increment), including all internal
+multiples and diffractions.
+
+## Highlights
+
+- **Arbitrary heterogeneous models**: sound speed, density (linearly
+  interpolated to the staggered half-grid, paper eq. 39), absorption in
+  Np/m or constant-Q.
+- **Spectral spatial accuracy** — no numerical dispersion; ~2–3 points per
+  wavelength are meaningful, 10 ppw is luxurious.
+- **Matrix-free, preconditioner-free iteration**: each step is pointwise
+  multiply-adds → one batched FFT → an unrolled per-k 3×3 product → IFFT →
+  pointwise multiply-adds. Built for GPUs.
+- **Shots are nearly free**: all operator tensors are shared across a shot
+  batch; the engine iterates `(F, B, 3, Nz, Nx)` — frequencies × shots
+  jointly, with converged frequencies compacted out on the fly.
+- **CUDA Graphs**: the fixed-point loop is captured and replayed as a single
+  launch, removing per-kernel launch latency — the dominant cost at seismic
+  grid sizes with thousands of iterations per frequency. Falls back to eager
+  execution automatically; results are identical.
+- **Exact wavefield movies without time stepping**: snapshots are
+  band-limited inverse-FFT samples of the stored full-field transfer
+  functions (equal to `np.fft.irfft` to machine precision,
+  `tests/test_timesynth.py`) — the `(nt, nz, nx)` cube is never materialized.
+- **Differentiable**: `solve_helmholtz` implements the adjoint-state
+  gradient via the implicit function theorem — O(1) memory in the iteration
+  count, exact (verified by `torch.autograd.gradcheck` and directional
+  finite differences). See `examples/fwi_gradient.py` for a single-frequency
+  FWI gradient that images a hidden interface.
+
+## Install & run
+
+Requires Python ≥ 3.10, PyTorch ≥ 2.4 (CUDA optional but strongly
+recommended), numpy, scipy, matplotlib; ffmpeg for MP4 export.
+
+```bash
+uv sync                                   # or: pip install -e .
+uv run tests/test_engine_api.py           # engine cross-validation (~1 min)
+uv run examples/demo_engine.py            # records + wavefield movie
+uv run examples/two_layer_ricker.py       # full physics validation suite
+```
+
+## Validation
+
+Every layer is checked against something it did not produce itself —
+operator identities, analytic Green's functions, plane-wave reflection
+theory, and reciprocity:
+
+| Test | Result |
+|---|---|
+| `(L+I)(L+I)^{-1} = I` per k-point | 9e-16 |
+| Adjoint symbol identity; skew-Hermitian differential block | 1e-15 / 0 |
+| Homogeneous medium vs analytic Hankel Green's function (10 ppw) | rel. L2 **8.9e-5**, amplitude ratio 1.0000, phase 0.00° |
+| Strong-contrast disk (2× speed, 2.5× density): acoustic reciprocity | **3.2e-6** |
+| Two-layer + 15 Hz Ricker gather, direct-wave window vs Hankel | mean 0.075%, max **0.18%** |
+| Zero-offset reflection amplitude vs Zoeppritz R₀ = 0.5714 | **0.08%** |
+| AVO curve (0–600 m offset) vs fluid–fluid Zoeppritz R(θ) | max 0.54% |
+| Reflection moveout / inverted interface depth | ≤ 1.3 ms (< 1 sample) / 596.3 m vs 596.25 m |
+| Engine (freq × shot batch) vs reference frequency-batch solver | 2.6e-7 |
+| Batched shots vs sequential shots | 0.0 |
+| Wavefield snapshots vs receiver records at shared samples | 3e-16 |
+| Direct-wave lag between receivers vs offset / c | exact (50/50 samples) |
+| Autograd: `gradcheck` + finite differences through (c₀, ρ₀, α, s) | pass |
+
+Reproduce with the scripts in `tests/`; a full measured log ships in
+`tests/test-log-260726.txt`.
+
+## Performance
+
+Demo problem (`examples/demo_engine.py`): 300 × 400 grid (padded to
+420 × 525), 2000 time samples, 95 frequencies covering 0.5–47.5 Hz,
+76,456 CBS iterations in total — **27 s kernel time on a single GPU**,
+CUDA Graphs enabled. Additional shots share all operator tensors and cost
+almost nothing beyond the extra field memory; per-chunk working-set size is
+printed at startup and is controlled by `freq_batch`.
+
+## Conventions that were pinned empirically
+
+Four things the papers leave implicit (or that differ on a staggered grid),
+determined by experiment and locked in by tests — read these before touching
+the internals:
+
+1. **Time convention is `+iωt`** (the H₀⁽²⁾ branch). Implemented literally,
+   it coincides with the numpy/torch FFT transfer-function convention, so
+   synthesis is `d(t) = irfft(W·H)` with **no conjugation anywhere**.
+2. **2D point-source normalization is `amplitude/dx²`** (a single node on a
+   spectral grid is a unit-integral sinc). The `2c₀/dx` correction in the
+   paper is 1D-specific.
+3. On the **staggered** grid the per-k `(L+I)^{-1}` matrix is **not
+   symmetric** (stagger phases `e^{±ik∆/2}`); the adjoint symbol is the
+   per-k **conjugate transpose**, not the elementwise conjugate (which holds
+   only for the non-staggered variant).
+4. **Grazing-incidence sponge ghosts**: sponge absorption is inefficient for
+   near-horizontally propagating energy. Keep sources/receivers roughly one
+   dominant wavelength away from the absorbing layer, or expect
+   percent-level contamination at long offsets.
+
+## Limitations (read before interpreting movies)
+
+- **Time wraparound.** Frequency sampling Δf = 1/(nt·dt) makes the
+  synthesized response periodic with period T = nt·dt: any coda still
+  ringing at t = T aliases back to t = 0 and shows up *before the source
+  fires*. Increase nt, or window/damp, when late energy matters. The
+  residual noise floor of the iterative solve is likewise non-causal
+  (uniform in time) and is set by `tol`.
+- **No free surface yet.** Vacuum cells (vp = 0) are outside the CBS
+  convergence domain by construction; a pressure-release flat surface via
+  the image method is on the roadmap. All four boundaries are absorbing
+  sponges, so there are no surface multiples (internal multiples are all
+  there — full-wave solution).
+- 2D only, single uniform grid spacing.
+
+## Repository layout
+
+```
+bornwave/
+  solver.py      CBSSolver2D — single-frequency, shot-batched
+  multifreq.py   CBSFreqBatch2D — frequency batch + convergence compaction
+  engine.py      CBSFreqShotBatch2D — (freq × shot) batch + CUDA Graphs
+  api.py         acoustic2d — the one-call forward-modeling engine
+  autograd.py    differentiable solve (implicit function theorem / adjoint)
+  operators.py   per-k Fourier symbols of (L+I)^{-1} and (L+I), staggered
+  grid.py        FFT-friendly sizes, sponge profiles, staggered averaging
+  synthesis.py   Ricker, band selection, per-frequency synthesis
+  timesynth.py   band spectra → time slices (torch-free, machine-precision)
+  viz.py         shot plots, wavefield movies (torch-free)
+  analytic.py    Hankel Green's function, fluid Zoeppritz (for validation)
+examples/        demo_engine.py, two_layer_ricker.py, fwi_gradient.py
+tests/           validation suite + measured log
+```
+
+Chinese documentation with additional implementation notes:
+[README.zh-CN.md](README.zh-CN.md).
+
+## Roadmap
+
+Free surface via the image method; complex-frequency damping for time
+wraparound; Anderson fluid-cylinder analytic benchmark for the
+variable-density path; true-residual (frequency-adaptive) stopping;
+frequency-bucket scheduling; 3D.
