@@ -56,6 +56,7 @@ def synthesize_shot(
     tol: float = 2e-4,
     max_iter: int = 60000,
     abs_points: int = 40,
+    freq_batch: int = 16,
     dtype: torch.dtype = torch.complex64,
     device=None,
     verbose: bool = True,
@@ -71,7 +72,7 @@ def synthesize_shot(
     c0 = torch.as_tensor(c0, dtype=torch.float64)
     nz, nx = c0.shape
     rec_x = np.atleast_1d(np.asarray(rec_x, dtype=int))
-    rec_z = np.broadcast_to(np.asarray(rec_z, dtype=int), rec_x.shape)
+    rec_z = np.broadcast_to(np.asarray(rec_z, dtype=int), rec_x.shape).copy()
     nrec = rec_x.size
 
     if wavelet is None:
@@ -82,7 +83,41 @@ def synthesize_shot(
 
     H = np.zeros((freqs.size, nrec), dtype=np.complex128)
     iters, resid = [], []
+    if verbose:
+        dev = torch.device(device) if device is not None else torch.device("cpu")
+        print(f"  [synthesize_shot] device={dev}, freq_batch={freq_batch}, "
+              f"{keep.size} freqs in [{freqs[keep[0]]:.2f}, {freqs[keep[-1]]:.2f}] Hz",
+              flush=True)
     t_start = time.time()
+
+    if freq_batch > 1:
+        from .multifreq import CBSFreqBatch2D
+        sp = point_source_2d(nz, nx, src[0], src[1], dx, dtype=dtype,
+                             device=device)
+        for c0_idx in range(0, keep.size, freq_batch):
+            chunk = keep[c0_idx:c0_idx + freq_batch]
+            omegas = 2.0 * np.pi * freqs[chunk]
+            solver = CBSFreqBatch2D(
+                c0, rho0, omegas, dx, alpha=alpha, abs_points=abs_points,
+                dtype=dtype, device=device)
+            fields, its, rs = solver.solve(sp, tol=tol, max_iter=max_iter)
+            p = fields[:, 2].cpu().numpy()               # (Fc, nz, nx)
+            H[chunk] = p[:, rec_z, rec_x]
+            iters.extend(its.tolist())
+            resid.extend(rs.tolist())
+            if verbose:
+                print(f"  chunk {chunk[0]:3d}-{chunk[-1]:3d} "
+                      f"({freqs[chunk[0]]:5.2f}-{freqs[chunk[-1]]:5.2f} Hz)  "
+                      f"iters<= {int(its.max()):5d}  "
+                      f"max residual={rs.max():.1e}  "
+                      f"elapsed={time.time() - t_start:6.1f}s", flush=True)
+        gather = np.fft.irfft(W[:, None] * H, n=nt, axis=0)
+        return {
+            "gather": gather, "t": np.arange(nt) * dt, "t0": t0,
+            "wavelet": wavelet, "W": W, "H": H, "freqs": freqs, "band": keep,
+            "iterations": np.asarray(iters), "residuals": np.asarray(resid),
+            "wall_time": time.time() - t_start,
+        }
     for j, k in enumerate(keep):
         omega = 2.0 * np.pi * freqs[k]
         solver = CBSSolver2D(

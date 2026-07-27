@@ -54,7 +54,7 @@ f0, nt, dt = 15.0, 768, 0.002
 print(f"two-layer model {nz}x{nx}, dx={dx} m, interface z={z_int:.2f} m, "
       f"h={h:.2f} m, {rec_ix.size} receivers")
 out = synthesize_shot(c0, rho0, dx, src, rec_iz, rec_ix, nt, dt, f0=f0,
-                      tol=2e-4, abs_points=60, verbose=True)
+                      device="cuda", freq_batch=73, tol=2e-4, abs_points=60, verbose=True)
 gather, t, t0 = out["gather"], out["t"], out["t0"]
 W, freqs, band = out["W"], out["freqs"], out["band"]
 print(f"{band.size} frequencies in [{freqs[band[0]]:.2f}, {freqs[band[-1]]:.2f}] Hz, "

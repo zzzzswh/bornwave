@@ -28,7 +28,7 @@ import math
 
 import torch
 
-__all__ = ["k_vectors", "assemble_symbols", "complex_median"]
+__all__ = ["k_vectors", "assemble_symbols", "assemble_symbols_batched", "complex_median"]
 
 
 def k_vectors(nz, nx, dx, dtype=torch.float64, device=None):
@@ -102,6 +102,65 @@ def assemble_symbols(
         Mf[1, 2] = 1j * KZ * Sz / sll
         Mf[2, 0] = 1j * KX * Sx.conj() / sll
         Mf[2, 1] = 1j * KZ * Sz.conj() / sll
+        Mf = Mf.to(cdtype)
+
+    return Mi.to(cdtype), Mf
+
+def assemble_symbols_batched(
+    nz: int,
+    nx: int,
+    dx: float,
+    a1: torch.Tensor,   # (F,) complex
+    a2: torch.Tensor,   # (F,) complex
+    lam1: torch.Tensor, # (F,) real
+    lam2: torch.Tensor, # (F,) real
+    cdtype: torch.dtype = torch.complex64,
+    device=None,
+    compute_forward: bool = True,
+):
+    """Frequency-batched version of assemble_symbols.
+
+    Returns (M_inv, M_fwd_or_None), each (F, 3, 3, nz, nx) complex.
+    """
+    F = a1.shape[0]
+    KZ, KX = k_vectors(nz, nx, dx, dtype=torch.float64, device=device)
+    KX = KX.to(torch.complex128)[None]           # (1, nz, nx)
+    KZ = KZ.to(torch.complex128)[None]
+
+    a1 = a1.to(torch.complex128).to(device).view(F, 1, 1)
+    a2 = a2.to(torch.complex128).to(device).view(F, 1, 1)
+    lam1 = lam1.to(torch.float64).to(device).view(F, 1, 1)
+    lam2 = lam2.to(torch.float64).to(device).view(F, 1, 1)
+    au = a1 + lam1
+    ap = a2 + lam2
+    sll = (lam1 * lam2).sqrt()
+
+    Sx = torch.exp(0.5j * KX * dx)               # (1, nz, nx)
+    Sz = torch.exp(0.5j * KZ * dx)
+    k2 = KX * KX + KZ * KZ
+    mu = k2 + au * ap                            # (F, nz, nx)
+
+    Mi = torch.empty((F, 3, 3, nz, nx), dtype=torch.complex128, device=device)
+    Mi[:, 0, 0] = lam1 * (mu - KX * KX) / (au * mu)
+    Mi[:, 1, 1] = lam1 * (mu - KZ * KZ) / (au * mu)
+    Mi[:, 0, 1] = -lam1 * KX * KZ * (Sx * Sz.conj()) / (au * mu)
+    Mi[:, 1, 0] = -lam1 * KX * KZ * (Sz * Sx.conj()) / (au * mu)
+    Mi[:, 0, 2] = -1j * KX * sll * Sx / mu
+    Mi[:, 1, 2] = -1j * KZ * sll * Sz / mu
+    Mi[:, 2, 0] = -1j * KX * sll * Sx.conj() / mu
+    Mi[:, 2, 1] = -1j * KZ * sll * Sz.conj() / mu
+    Mi[:, 2, 2] = lam2 * au / mu
+
+    Mf = None
+    if compute_forward:
+        Mf = torch.zeros((F, 3, 3, nz, nx), dtype=torch.complex128, device=device)
+        Mf[:, 0, 0] = (au / lam1).expand(F, nz, nx)
+        Mf[:, 1, 1] = Mf[:, 0, 0]
+        Mf[:, 2, 2] = (ap / lam2).expand(F, nz, nx)
+        Mf[:, 0, 2] = 1j * KX * Sx / sll
+        Mf[:, 1, 2] = 1j * KZ * Sz / sll
+        Mf[:, 2, 0] = 1j * KX * Sx.conj() / sll
+        Mf[:, 2, 1] = 1j * KZ * Sz.conj() / sll
         Mf = Mf.to(cdtype)
 
     return Mi.to(cdtype), Mf

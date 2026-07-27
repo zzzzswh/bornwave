@@ -10,6 +10,7 @@ from .solver import CBSSolver2D, SolveResult, point_source_2d, alpha_from_Q
 from .grid import next_fast_len
 from .analytic import pressure_point_source_2d, fluid_reflection_coefficient
 from .synthesis import ricker, band_indices, synthesize_shot
+from .autograd import solve_helmholtz, HelmholtzDiagSolve
 
 __all__ = [
     "CBSSolver2D",

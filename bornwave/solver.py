@@ -182,9 +182,23 @@ class CBSSolver2D:
 
     # ------------------------------------------------------------------ #
     def _apply_symbol(self, M: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """IFFT( M(k) @ FFT(x) ), batched over leading dims of x."""
+        """IFFT( M(k) @ FFT(x) ), batched over leading dims of x.
+
+        The 3x3 product is UNROLLED into elementwise multiply-adds: on CUDA
+        the equivalent einsum lowers to permute+bmm and copies the full
+        symbol tensor every iteration, which dominates the runtime."""
         X = torch.fft.fftn(x, dim=(-2, -1))
-        Y = torch.einsum("ijhw,...jhw->...ihw", M, X)
+        x0 = X[..., 0, :, :]
+        x1 = X[..., 1, :, :]
+        x2 = X[..., 2, :, :]
+        Y = torch.stack(
+            [
+                M[0, 0] * x0 + M[0, 1] * x1 + M[0, 2] * x2,
+                M[1, 0] * x0 + M[1, 1] * x1 + M[1, 2] * x2,
+                M[2, 0] * x0 + M[2, 1] * x1 + M[2, 2] * x2,
+            ],
+            dim=-3,
+        )
         return torch.fft.ifftn(Y, dim=(-2, -1))
 
     def apply_A(self, x: torch.Tensor) -> torch.Tensor:
