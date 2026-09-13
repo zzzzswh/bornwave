@@ -94,7 +94,7 @@ plot_wavefield_video(res.snaps, "wavefield.mp4", fps=12, dh=dh,
 $[u_x, u_z, p]$（$u_x$ 沿 $x$ 偏移 $+\Delta/2$，$u_z$ 沿 $z$ 偏移
 $+\Delta/2$，$p$ 位于整格点）：
 
-$$
+```math
 \begin{pmatrix}
 \rho_0^{+}\,(i\omega + \gamma^{+}) & \nabla^{+} \\
 \nabla^{-}\cdot & \dfrac{i\omega + \gamma}{\rho_0 c^2}
@@ -102,17 +102,17 @@ $$
 \begin{pmatrix}\mathbf{u}\\ p\end{pmatrix}
 =
 \begin{pmatrix}\hat{s}_u\\ \hat{s}_p\end{pmatrix}
-$$
+```
 
 上标 $\pm$ 表示前向/后向交错，$\rho_0^{+}$ 是线性插值到半格点的密度。
 自由空间辐射条件由吸收项 $\gamma$ 施加——它是一条多项式斜坡，可在整格点与
 半格点上解析求值。吸收通过复数声速平方进入方程：
 
-$$
+```math
 c^2 = \frac{c_0^2}{1 - 2i\alpha c_0/\omega}
 \qquad\text{或对常 } Q \text{ 模型}\qquad
 c^2 = \frac{c_0^2}{1 - i/Q},
-$$
+```
 
 后者与频变的 $\alpha(\omega) = \omega/(2c_0Q)$ 完全等价，但装配时与频率无关。
 
@@ -128,10 +128,10 @@ $y = C^{-1/2}\hat{s}$、
 $C^{1/2} = \mathrm{diag}(\sqrt{\lambda_1}, \sqrt{\lambda_1}, \sqrt{\lambda_2})$
 下，方程组化为 $Ax = y$（$A = L + V$），CBS 迭代为
 
-$$
+```math
 x \leftarrow x + \nu\,B\left[(L+I)^{-1}(Bx + y) - x\right],
 \qquad B = I - V,\quad \nu = 0.9 .
-$$
+```
 
 保证收敛的是压缩性 $\|V\| < 1$：介质对比度可以任意大，只要有界即可。
 
@@ -261,7 +261,7 @@ from bornwave import CBSSolver2D, CBSFreqShotBatch2D, synthesize_shot, solve_hel
 | 频点 | 95 个，覆盖 0.5–47.5 Hz |
 | CBS 迭代 | 合计 76,456 次 |
 | Kernel 时间 | **27 s**，CUDA Graph 开启 |
-| 硬件 | 单卡 CUDA GPU（`Tesla V100-PCIE-32GB`） |
+| 硬件 | 单卡 CUDA GPU（`NVIDIA <型号>`） |
 
 加炮共享全部算子张量，除额外的场内存外几乎没有代价。
 每块的工作集大小在启动时打印，由 `freq_batch` 控制；

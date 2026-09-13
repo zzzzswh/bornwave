@@ -284,7 +284,7 @@ Reference problem — `examples/demo_engine.py`:
 | Frequencies | 95, covering 0.5–47.5 Hz |
 | CBS iterations | 76,456 total |
 | Kernel time | **27 s**, CUDA Graphs enabled |
-| Hardware | single CUDA GPU (`Tesla V100-PCIE-32GB`) |
+| Hardware | single CUDA GPU (`NVIDIA <model>`) |
 
 Additional shots share all operator tensors and cost almost nothing beyond the
 extra field memory. The per-chunk working-set size is printed at startup and is
