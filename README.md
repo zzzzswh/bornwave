@@ -6,7 +6,7 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.4%2B-ee4c2c.svg)](https://pytorch.org/)
 [![CUDA](https://img.shields.io/badge/CUDA-optional-76b900.svg)](https://developer.nvidia.com/cuda-toolkit)
 
-GPU acoustic wave simulation without time stepping.
+Frequency-domain GPU acoustic wave simulation.
 
 `bornwave` solves the 2-D acoustic Helmholtz equation in media with arbitrary
 heterogeneous sound speed, density and absorption. It is a matrix-free PyTorch
@@ -15,6 +15,9 @@ Arridge, Treeby & Cox (JASA, 2026), extended here with joint frequency × shot
 batching, CUDA-graph execution, exact band-limited wavefield synthesis, and an
 adjoint-state autograd interface. One call produces shot records, full
 wavefield movies and FWI gradients.
+
+Time-domain results are obtained by solving the wavelet's frequency components
+in parallel and superposing them.
 
 Despite the name this is a **full-wave** solver. "Born" refers to the form of
 the iterative series, not to the first-order Born approximation: the converged
@@ -353,8 +356,6 @@ bornwave/
 examples/        demo_engine.py, two_layer_ricker.py, fwi_gradient.py
 tests/           validation suite + measured log
 ```
-
-Chinese documentation: [README.zh-CN.md](README.zh-CN.md).
 
 ## Roadmap
 

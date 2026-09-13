@@ -6,15 +6,15 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.4%2B-ee4c2c.svg)](https://pytorch.org/)
 [![CUDA](https://img.shields.io/badge/CUDA-optional-76b900.svg)](https://developer.nvidia.com/cuda-toolkit)
 
-> English documentation: [README.md](README.md)
-
-无需时间步进的 GPU 声波模拟。
+频率域的 GPU 声波模拟。
 
 `bornwave` 求解二维声波 Helmholtz 方程，支持**任意非均匀速度、密度与吸收**。
 它是 Stanziola, Arridge, Treeby & Cox（JASA, 2026）收敛 Born 级数（CBS）
-求解器的矩阵自由 PyTorch 实现，并在其基础上扩展了频率 × 炮联合批量、
+求解器的 matrix-free PyTorch 实现，并在其基础上扩展了频率 × 炮联合批量、
 CUDA Graph 执行、带限波场精确合成，以及基于伴随状态的自动微分接口。
 一次调用即可得到炮集记录、完整波场动画与 FWI 梯度。
+
+时间域结果由子波的多个频率成分分别并行求解、再叠加得到。
 
 名字里虽然有 Born，但这是**全波**求解器：这里的 "Born" 指迭代级数的形式，
 而非一阶 Born 近似。收敛后的解在实测真残差意义下满足非均匀 Helmholtz 方程组，
@@ -118,7 +118,7 @@ c^2 = \frac{c_0^2}{1 - i/Q},
 
 后者与频变的 $\alpha(\omega) = \omega/(2c_0Q)$ 完全等价，但装配时与频率无关。
 
-### 分裂预处理与不动点迭代
+### 分裂预条件子与不动点迭代
 
 把方程组写成 $D w = \hat{s}$，其中 $D = \mathrm{Diag} + \mathcal{L}$，
 微分算子块 $\mathcal{L}$ 与介质无关，介质**只**通过三个对角场进入。
@@ -135,7 +135,7 @@ x \leftarrow x + \nu\,B\left[(L+I)^{-1}(Bx + y) - x\right],
 \qquad B = I - V,\quad \nu = 0.9 .
 ```
 
-保证收敛的是压缩性 $\|V\| < 1$：介质对比度可以任意大，只要有界即可。
+保证收敛的是 contraction 条件 $\|V\| < 1$：介质对比度可以任意大，只要有界即可。
 
 ### 单步迭代的代价
 
@@ -156,7 +156,7 @@ $S_e = e^{+i k_e \Delta/2}$，则一次迭代只有：
 
 子波用 `rfft` 分解，保留幅度高于阈值的频点，按相邻频率分块求解。
 记录由 $d(t) = \mathrm{irfft}(W \cdot H)$ 得到；波场快照则是对保存的全场
-传递函数做**精确的带限逆变换采样**，因此从不物化 $(n_t, n_z, n_x)$ 数据立方。
+传递函数做**精确的带限逆变换采样**，因此从不在内存中完整展开 $(n_t, n_z, n_x)$ 数据体。
 由于传递函数 $H$ 已经保存，换一个子波重新合成只需一次 FFT，无需重新求解。
 
 ## 特性
@@ -164,11 +164,11 @@ $S_e = e^{+i k_e \Delta/2}$，则一次迭代只有：
 - **任意非均匀模型**——速度、密度（线性插值到交错半格点）、以及 Np/m 或
   常 $Q$ 形式的吸收。
 - **空间谱精度**——Fourier 拟谱离散，不存在会累积的数值频散；验证套件跑在
-  每波长 10 点，理论下限是 2 点。
+  每波长 10 个采样点（ppw），理论下限是 2。
 - **频率 × 炮联合批量**——引擎迭代单个 `(F, B, 3, Nz, Nx)` 张量，
-  已收敛的频点即时定稿并从工作张量中压缩移除。
-- **CUDA Graph**——在本方法的网格规模与迭代次数下，墙钟时间由 kernel 启动
-  延迟主导，而不是浮点运算。不动点主循环被捕获为单次 replay；每次压缩后
+  已收敛的频点立即输出结果并从工作张量中移除（compaction）。
+- **CUDA Graph**——在本方法的网格规模与迭代次数下，wall time 由 kernel 启动
+  延迟主导，而不是浮点运算。不动点主循环被捕获为单次 replay；每次 compaction 后
   自动重新捕获；捕获失败则带警告回退 eager 执行，结果完全一致。
 - **波场动画不需要额外求解**——快照与记录来自同一组传递函数，
   与 `np.fft.irfft` 达到机器精度一致。
@@ -189,13 +189,13 @@ $S_e = e^{+i k_e \Delta/2}$，则一次迭代只有：
 | `alpha` / `Q` | 吸收系数 [Np/m]，或常 $Q$ 品质因子，二者互斥。 |
 | `nbc` | 海绵层厚度（格点数），40–60 足够。它是多项式 $\gamma$ 斜坡，不是有限差分边界，不需要 FD 那种上百格的宽度。 |
 | `tol` | 相对增量停止判据。经验值 `2e-4` 对应约 0.1–1 % 的振幅精度（见[验证](#验证)）。 |
-| `freq_batch` | 每块联合求解的频点数，是内存/吞吐的主要旋钮。 |
+| `freq_batch` | 每块联合求解的频点数，是内存与吞吐的主要调节参数。 |
 | `snap_interval` | 每隔多少个时间采样保存一次完整压力波场。 |
 | `cuda_graph` | `True` / `False` / `"auto"`。 |
 
 返回 `AcousticResult`，包含 `seis_p`、`seis_vx`、`seis_vz`、`snaps`、
 `snap_times`、传递函数 `H_p`、逐频 `iterations` 与 `residuals`、
-`stats` 诊断命名空间，以及 `resynthesize(wavelet)`。
+`stats`（诊断信息），以及 `resynthesize(wavelet)`。
 
 注意 `vx`/`vz` 记录取的是检波点格子上的交错场 $u_x$、$u_z$；
 在地震尺度的网格间距下，半格偏移远小于一个波长。
@@ -209,8 +209,8 @@ from bornwave import CBSSolver2D, CBSFreqShotBatch2D, synthesize_shot, solve_hel
 | 对象 | 用途 |
 |---|---|
 | `CBSSolver2D` | 单频、炮批量。参考实现。 |
-| `CBSFreqBatch2D` | 频率批量 + 收敛压缩。 |
-| `CBSFreqShotBatch2D` | 频率 × 炮联合批量，CUDA Graph 加速，`acoustic2d` 的底座。 |
+| `CBSFreqBatch2D` | 频率批量 + 收敛后 compaction。 |
+| `CBSFreqShotBatch2D` | 频率 × 炮联合批量，CUDA Graph 加速，`acoustic2d` 的底层实现。 |
 | `synthesize_shot` | 子波 → 频带 → 时间域道集，不经过引擎层。 |
 | `solve_helmholtz` | 可微单频求解，对 $c_0$、$\rho_0$、$\alpha$ 与源均可求梯度。 |
 
@@ -219,7 +219,7 @@ from bornwave import CBSSolver2D, CBSFreqShotBatch2D, synthesize_shot, solve_hel
 `solve_helmholtz` 是基于隐函数定理的 `torch.autograd.Function`。
 反向传播只需在同一套 CBS 机制上做一次伴随求解（$V \to \bar V$，
 符号换成逐 $k$ 共轭转置），梯度是逐点零延迟互相关，因此只需保存正演解。
-预处理器内部（移位、缩放、符号）由 **detach** 后的对角场构造：
+预条件子内部（移位、缩放、符号）由 **detach** 后的对角场构造：
 收敛解并不依赖它们，所以这个梯度是精确的，不是近似。
 `examples/fwi_gradient.py` 给出一个三炮单频 FWI 梯度，
 能把初始模型里并不存在的界面成像出来。
@@ -232,8 +232,8 @@ from bornwave import CBSSolver2D, CBSFreqShotBatch2D, synthesize_shot, solve_hel
 | 检验项 | 参照 | 结果 | 脚本 |
 |---|---|---|---|
 | $(L+I)(L+I)^{-1} = I$ 逐波数 | 精确恒等式 | 9.0e-16 | `test_operator_identity.py` |
-| 伴随符号；微分块斜厄米性 | 精确恒等式 | 1.4e-15 / 0 | `test_operator_identity.py` |
-| 均匀介质，每波长 10 点 | 解析二维 Hankel 格林函数 | 相对 L2 **8.9e-5**，振幅比 1.0000，相位 0.00° | `test_homogeneous_hankel.py` |
+| 伴随符号；微分块反厄米性（skew-Hermitian） | 精确恒等式 | 1.4e-15 / 0 | `test_operator_identity.py` |
+| 均匀介质，每波长 10 个采样点 | 解析二维 Hankel 格林函数 | 相对 L2 **8.9e-5**，振幅比 1.0000，相位 0.00° | `test_homogeneous_hankel.py` |
 | 强对比圆盘（2× 速度、2.5× 密度） | 声学互易性 | **3.2e-6** | `test_heterogeneous_reciprocity.py` |
 | 两层模型 + 15 Hz Ricker，直达波窗口 | 带限解析 Hankel | 平均 0.075 %，最大 **0.18 %** | `examples/two_layer_ricker.py` |
 | 零偏移距反射振幅 | 流体 Zoeppritz $R_0 = 0.5714$ | 0.5710（**0.08 %**） | `examples/two_layer_ricker.py` |
@@ -267,7 +267,7 @@ from bornwave import CBSSolver2D, CBSFreqShotBatch2D, synthesize_shot, solve_hel
 
 加炮共享全部算子张量，除额外的场内存外几乎没有代价。
 每块的工作集大小在启动时打印，由 `freq_batch` 控制；
-迭代次数随频率单调增长，所以把相邻频点分在同一块里，压缩浪费很小。
+迭代次数随频率单调增长，所以把相邻频点分在同一块里，compaction 的浪费很小。
 
 ## 实现约定（改内部之前请先读）
 
@@ -286,21 +286,21 @@ from bornwave import CBSSolver2D, CBSFreqShotBatch2D, synthesize_shot, solve_hel
    $e^{\pm ik\Delta/2}$ 破坏了对称性。伴随符号是逐 $k$ 的**共轭转置**，
    而不是逐元素共轭（后者只对非交错版本成立）。两者计算代价相同。
 
-4. **掠射海绵虚像。** 海绵吸收对近水平传播的能量效率很低。
+4. **掠射入射下的海绵残余反射。** 海绵吸收对近水平传播的能量效率很低。
    炮检点要离吸收层大约一个主波长以上；更近的话，沿海绵掠射的残余反射
-   与直达波无法分窗，大偏移距误差可达百分之几。
+   与直达波无法用时窗分开，大偏移距误差可达百分之几。
    这与时间域有限差分吸收边界的掠射问题是同一回事，
    设计地表观测系统时需要留意。
 
 ## 局限
 
-- **时间域绕卷（wraparound）。** 频率采样 $\Delta f = 1/(n_t \Delta t)$ 使合成
+- **时间域 wraparound。** 频率采样 $\Delta f = 1/(n_t \Delta t)$ 使合成
   响应以 $T = n_t \Delta t$ 为周期：任何在 $t = T$ 仍在振荡的尾波会混叠回
   $t = 0$，表现为**在震源激发之前就出现能量**。关心晚至能量时请增大 `nt`，
-  或做加窗/衰减处理。迭代求解的残余噪声本底同样是非因果的
+  或做加窗/衰减处理。迭代求解的本底噪声同样是非因果的
   （沿时间均匀分布），其量级由 `tol` 决定。
 - **暂不支持自由表面。** 真空单元（`vp = 0`）在构造上就落在 CBS 收敛域之外，
-  因为压缩性要求介质对比有界。四边都是吸收海绵，所以没有表面多次波；
+  因为 contraction 要求介质对比有界。四边都是吸收海绵，所以没有表面多次波；
   层间多次波则完整保留。
 - **仅二维**，且只支持单一均匀网格间距。
 
@@ -309,12 +309,12 @@ from bornwave import CBSSolver2D, CBSFreqShotBatch2D, synthesize_shot, solve_hel
 ```
 bornwave/
   solver.py      CBSSolver2D —— 单频、炮批量
-  multifreq.py   CBSFreqBatch2D —— 频率批量 + 收敛压缩
+  multifreq.py   CBSFreqBatch2D —— 频率批量 + compaction
   engine.py      CBSFreqShotBatch2D —— 频率 × 炮批量 + CUDA Graph
   api.py         acoustic2d —— 一行正演入口
   autograd.py    可微求解（隐函数定理 / 伴随）
   operators.py   (L+I)^-1 与 (L+I) 的逐 k Fourier 符号（交错版）
-  grid.py        FFT 友好尺寸、海绵剖面、交错平均
+  grid.py        FFT 友好尺寸、海绵层衰减曲线、交错平均
   synthesis.py   Ricker 子波、频带选择、逐频合成
   timesynth.py   频带谱 → 时间切片（不依赖 torch，机器精度）
   viz.py         炮集绘图、波场动画（不依赖 torch）
@@ -326,10 +326,10 @@ tests/           验证套件 + 实测日志
 ## 路线图
 
 - 镜像法自由表面
-- 复频率阻尼，抑制时间域绕卷
+- 复频率阻尼，抑制时间域 wraparound
 - Anderson 流体圆柱散射解析解，用于变密度路径的解析级基准
 - 基于真残差的逐频自适应停止判据
-- 频段分桶调度
+- 频段分组调度（frequency bucketing）
 - Osnabrugge (2021) 超薄吸收边界层
 - 三维（4 个场，每步 8 次 FFT）
 
