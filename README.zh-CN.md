@@ -1,5 +1,7 @@
 # bornwave
 
+[English](README.md) · **简体中文**
+
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.4%2B-ee4c2c.svg)](https://pytorch.org/)
 [![CUDA](https://img.shields.io/badge/CUDA-optional-76b900.svg)](https://developer.nvidia.com/cuda-toolkit)

@@ -1,5 +1,7 @@
 # bornwave
 
+**English** · [简体中文](README.zh-CN.md)
+
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.4%2B-ee4c2c.svg)](https://pytorch.org/)
 [![CUDA](https://img.shields.io/badge/CUDA-optional-76b900.svg)](https://developer.nvidia.com/cuda-toolkit)
@@ -97,7 +99,7 @@ discretized on a staggered Fourier grid with field ordering
 $[u_x, u_z, p]$ ($u_x$ offset by $+\Delta/2$ in $x$, $u_z$ by $+\Delta/2$ in
 $z$, $p$ collocated):
 
-$$
+```math
 \begin{pmatrix}
 \rho_0^{+}\,(i\omega + \gamma^{+}) & \nabla^{+} \\
 \nabla^{-}\cdot & \dfrac{i\omega + \gamma}{\rho_0 c^2}
@@ -105,7 +107,7 @@ $$
 \begin{pmatrix}\mathbf{u}\\ p\end{pmatrix}
 =
 \begin{pmatrix}\hat{s}_u\\ \hat{s}_p\end{pmatrix}
-$$
+```
 
 Superscripts $\pm$ denote forward/backward staggering; $\rho_0^{+}$ is the
 density linearly interpolated onto the half-grid. Free-space radiation is
@@ -113,11 +115,11 @@ imposed by the absorbing term $\gamma$, a polynomial ramp evaluated
 analytically at both collocated and staggered coordinates. Absorption enters
 through a complex squared sound speed,
 
-$$
+```math
 c^2 = \frac{c_0^2}{1 - 2i\alpha c_0/\omega}
 \qquad\text{or, for constant }Q,\qquad
 c^2 = \frac{c_0^2}{1 - i/Q},
-$$
+```
 
 the latter being exactly equivalent to the frequency-dependent
 $\alpha(\omega) = \omega/(2c_0Q)$ while remaining frequency-independent to
@@ -136,10 +138,10 @@ scaled variables $x = C^{1/2} w$, $y = C^{-1/2}\hat{s}$,
 $C^{1/2} = \mathrm{diag}(\sqrt{\lambda_1}, \sqrt{\lambda_1}, \sqrt{\lambda_2})$,
 the system becomes $Ax = y$ with $A = L + V$, and the CBS iteration is
 
-$$
+```math
 x \leftarrow x + \nu\,B\left[(L+I)^{-1}(Bx + y) - x\right],
 \qquad B = I - V,\quad \nu = 0.9 .
-$$
+```
 
 The contraction $\|V\| < 1$ is what guarantees convergence; the medium contrast
 may be arbitrary as long as it is bounded.
