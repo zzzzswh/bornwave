@@ -75,6 +75,40 @@ def test_batched_shots_equal_sequential():
     print(f"  batched == sequential shots: {e1:.2e}, {e2:.2e}")
 
 
+def test_warm_start_engine():
+    """x0 must not change the solution, only the iteration count."""
+    c, r, dx = _two_layer()
+    sp = point_source_2d(60, 72, 8, 36, dx, dtype=torch.complex128)
+    e1 = CBSFreqShotBatch2D(c, r, 2 * np.pi * np.array([10.0]), dx,
+                            abs_points=30, dtype=torch.complex128, device=DEV)
+    _, _, _, st = e1.solve(sp[None], tol=1e-7, return_state=True)
+
+    e2 = CBSFreqShotBatch2D(c, r, 2 * np.pi * np.array([11.0]), dx,
+                            abs_points=30, dtype=torch.complex128, device=DEV)
+    cold, itc, _ = e2.solve(sp[None], tol=1e-7)
+    warm, itw, _ = e2.solve(sp[None], tol=1e-7, x0=st)
+    err = ((warm - cold).norm() / cold.norm()).item()
+    assert err < 1e-5, f"warm start changed the solution: {err:.2e}"
+    assert int(itw[0]) <= int(itc[0])
+    print(f"  warm start: same solution ({err:.1e}), "
+          f"iters {int(itw[0])} <= {int(itc[0])}")
+
+
+def test_api_warm_start_consistency():
+    """acoustic2d(warm_start=True) == acoustic2d(warm_start=False)."""
+    nz, nx, dh = 64, 80, 10.0
+    vp = np.full((nz, nx), 2000.0); rho = np.full((nz, nx), 1000.0)
+    kw = dict(sx=[40], sz=[10], rx=np.array([20, 60]), rz=10, nbc=30,
+              tol=1e-6, freq_batch=8, dtype=torch.complex128,
+              device=DEV, verbose=False)
+    a = acoustic2d(vp, rho, dh, 2e-3, 192, 12.0, warm_start=False, **kw)
+    b = acoustic2d(vp, rho, dh, 2e-3, 192, 12.0, warm_start=True, **kw)
+    err = np.abs(a.seis_p - b.seis_p).max() / np.abs(a.seis_p).max()
+    assert err < 1e-4, f"warm-start sweep diverged from cold: {err:.2e}"
+    print(f"  api warm vs cold sweep: rel diff {err:.1e}, iterations "
+          f"{b.stats.total_iterations} vs {a.stats.total_iterations}")
+
+
 def test_acoustic2d_end_to_end():
     nz, nx, dh = 64, 96, 10.0
     nt, dt, f0 = 256, 2e-3, 10.0
@@ -122,4 +156,6 @@ if __name__ == "__main__":
     test_engine_matches_multifreq()
     test_batched_shots_equal_sequential()
     test_acoustic2d_end_to_end()
+    test_warm_start_engine()
+    test_api_warm_start_consistency()
     print("engine & API tests passed")

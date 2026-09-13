@@ -232,14 +232,21 @@ class CBSFreqShotBatch2D:
     # ---------------------------------------------------------------- #
     @torch.no_grad()
     def solve(self, sp, tol=2e-4, max_iter=60000, check_every=50,
-              cuda_graph="auto"):
+              cuda_graph="auto", x0=None, return_state=False):
         """Masked + compacting fixed-point iteration over (F, B).
 
         cuda_graph : True | False | "auto"
             "auto" enables graph capture on CUDA devices. Any capture failure
             falls back to the eager loop with a warning (results identical).
+        x0 : optional PHYSICAL padded initial state (F, B, 3, Nz, Nx), e.g.
+            the phase-rotated solution of a nearby frequency (frequency
+            continuation). Rescaled into this engine's scaled coordinates
+            internally. The converged solution does not depend on x0 — only
+            the iteration count does.
+        return_state : additionally return the physical padded solution
+            states (F, B, 3, Nz, Nx), for warm-starting a subsequent chunk.
 
-        Returns (fields, iters, resid):
+        Returns (fields, iters, resid[, state]):
             fields (F, B, 3, nz_int, nx_int) unscaled [ux, uz, p]
             iters  (F,) long, resid (F, B) float64 true relative residuals.
         """
@@ -259,6 +266,13 @@ class CBSFreqShotBatch2D:
         resid = torch.zeros(F, Bs, dtype=torch.float64)
 
         x = torch.zeros_like(y)
+        if x0 is not None:
+            x = torch.as_tensor(x0, dtype=self.cdtype, device=self.device) \
+                * self.sqrt_lam                     # physical -> scaled
+            if x.shape != y.shape:
+                raise ValueError(f"x0 broadcast to {tuple(x.shape)}, "
+                                 f"expected {tuple(y.shape)}")
+        state = torch.empty_like(y) if return_state else None
         Bop, V, Mi, Mf, sqlam = self.Bop, self.V, self.M_inv, self.M_fwd, self.sqrt_lam
         idx = torch.arange(F, device=self.device)
 
@@ -277,7 +291,10 @@ class CBSFreqShotBatch2D:
                   / torch.linalg.vector_norm(yd, dim=(-3, -2, -1)))
             gid = idx[sel_done]
             resid[gid.cpu()] = rn.to(torch.float64).cpu()
-            out[gid] = (xd / sqlam[sel_done])[..., iz, ix]
+            phys = xd / sqlam[sel_done]
+            out[gid] = phys[..., iz, ix]
+            if state is not None:
+                state[gid] = phys
 
         it = 0
         while it < max_iter:
@@ -313,6 +330,8 @@ class CBSFreqShotBatch2D:
                 finalize(done)
                 keep = ~done
                 if not bool(keep.any()):
+                    if return_state:
+                        return out, iters, resid, state
                     return out, iters, resid
                 x, y = x[keep], y[keep]
                 Bop, V, sqlam = Bop[keep], V[keep], sqlam[keep]

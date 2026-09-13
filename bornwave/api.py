@@ -37,13 +37,32 @@ from types import SimpleNamespace
 
 import numpy as np
 import torch
+from scipy.ndimage import map_coordinates
 
 from .engine import CBSFreqShotBatch2D
-from .grid import next_fast_len
+from .grid import next_fast_len, pad_replicate_2d
 from .synthesis import ricker, band_indices
 from .timesynth import time_slices_from_band
 
 __all__ = ["acoustic2d", "AcousticResult"]
+
+
+def _straight_ray_tau(vp, src_z, src_x, dh, n_samp=64):
+    """tau(z, x) = |r| * mean slowness along the straight ray src -> (z, x).
+
+    A cheap travel-time estimate used only to phase-rotate warm starts
+    (frequency continuation); it never affects the converged solution."""
+    nz, nx = vp.shape
+    s = 1.0 / vp
+    t = np.linspace(0.0, 1.0, n_samp)[:, None, None]
+    pz = np.broadcast_to(src_z + t * (np.arange(nz)[None, :, None] - src_z),
+                         (n_samp, nz, nx)).ravel()
+    px = np.broadcast_to(src_x + t * (np.arange(nx)[None, None, :] - src_x),
+                         (n_samp, nz, nx)).ravel()
+    s_line = map_coordinates(s, [pz, px], order=1).reshape(n_samp, nz, nx)
+    zz, xx = np.mgrid[0:nz, 0:nx]
+    r = np.hypot(zz - src_z, xx - src_x) * dh
+    return r * s_line.mean(axis=0)
 
 
 @dataclass
@@ -117,6 +136,8 @@ def acoustic2d(
     max_iter: int = 60000,
     check_every: int = 50,
     snap_interval: int | None = None,
+    warm_start: bool = True,
+    warm_stride: int = 4,
     cuda_graph="auto",
     dtype: torch.dtype = torch.complex64,
     device=None,
@@ -145,6 +166,16 @@ def acoustic2d(
         2e-4 gives ~0.1-1%% amplitude accuracy (see README validation).
     snap_interval : store a full pressure wavefield every this many time
         samples (synthesized exactly from the frequency band).
+    warm_start : frequency continuation via an anchor-then-fill schedule:
+        every warm_stride-th retained bin is solved cold first; the rest are
+        warm-started from their nearest anchor, phase-rotated by
+        exp(-i*dw*tau(x)) with a per-shot straight-ray travel-time estimate.
+        The converged solution is unchanged (the fixed point does not depend
+        on the initial guess); only iteration counts drop. Costs
+        ~n_freqs/warm_stride full-field state buffers of memory.
+    warm_stride : anchor spacing in retained bins (default 4, so reference
+        distance for fills is <= 2 bins — the regime where continuation is
+        measured to pay; larger strides save memory but degrade fills).
     cuda_graph : True | False | "auto" — capture the CBS iteration as a CUDA
         graph (large speedup on GPU: removes per-kernel launch latency).
     device : torch device; default = "cuda" if available else "cpu".
@@ -232,12 +263,53 @@ def acoustic2d(
               f"freq_batch={freq_batch} (~{est:.1f} GB working set/chunk)",
               flush=True)
 
-    # ---- chunked frequency sweep -----------------------------------------
+    # ---- frequency sweep: anchor-then-fill schedule -----------------------
+    # warm_start uses an anchor-then-fill schedule. Naive chain warm starts
+    # across chunks fail: the phase rotation exp(-i dw tau) only tracks the
+    # DIRECT arrival; reflected/diffracted components carry their own travel
+    # times and decorrelate over long extrapolations (measured: at df of one
+    # bin rot saves ~33% iterations; at 16 bins it is a wash or worse at
+    # high frequency). So: anchors (every warm_stride-th retained bin) are
+    # solved COLD first; the remaining bins are warm-started from their
+    # NEAREST anchor (reference distance <= warm_stride/2 bins, inside the
+    # regime where continuation is measured to pay). Fill bins have no
+    # mutual dependencies, so batching is unaffected. Anchor states cost
+    # ~(n_freq/warm_stride) full complex fields of memory.
+    tau_t = None
+    npos = keep.size
+    if warm_start and npos > 2 * warm_stride:
+        pt = abs_points
+        nz_tot, nx_tot = (next_fast_len(nz + 2 * pt),
+                          next_fast_len(nx + 2 * pt))
+        pads = (pt, nz_tot - nz - pt, pt, nx_tot - nx - pt)
+        tau_t = torch.stack([
+            pad_replicate_2d(
+                torch.as_tensor(_straight_ray_tau(vp, sz[b], sx[b], dh)),
+                pads)
+            for b in range(nshot)]).to(device)          # (B, Nz, Nx) float64
+
+        K = max(int(warm_stride), 2)
+        anchor_pos = np.arange(0, npos, K)
+        fill_pos = np.setdiff1d(np.arange(npos), anchor_pos)
+        near = np.clip((np.round(fill_pos / K) * K).astype(np.int64),
+                       0, anchor_pos[-1])
+        near_map = dict(zip(fill_pos.tolist(), near.tolist()))
+        anchor_states = {}                      # keep-position -> (B,3,Nz,Nx)
+        tasks = [(anchor_pos[i:i + freq_batch], True)
+                 for i in range(0, anchor_pos.size, freq_batch)]
+        tasks += [(fill_pos[i:i + freq_batch], False)
+                  for i in range(0, fill_pos.size, freq_batch)]
+    else:
+        warm_start = False
+        allpos = np.arange(npos)
+        tasks = [(allpos[i:i + freq_batch], True)
+                 for i in range(0, npos, freq_batch)]
+
     kernel_time = 0.0
     setup_time = 0.0
-    for i0 in range(0, keep.size, freq_batch):
-        chunk = keep[i0:i0 + freq_batch]
-        omegas = 2.0 * np.pi * freqs[chunk]
+    for pos, is_anchor in tasks:
+        bins = keep[pos]
+        omegas = 2.0 * np.pi * freqs[bins]
 
         ts = time.time()
         eng = CBSFreqShotBatch2D(
@@ -247,30 +319,52 @@ def acoustic2d(
             torch.cuda.synchronize(device)
         setup_time += time.time() - ts
 
+        x0 = None
+        if warm_start and not is_anchor:
+            ref_pos = np.array([near_map[int(p)] for p in pos])
+            st = torch.stack([anchor_states[int(rp)] for rp in ref_pos])
+            dw = torch.as_tensor(
+                omegas - 2.0 * np.pi * freqs[keep[ref_pos]],
+                dtype=torch.float64, device=device).view(-1, 1, 1, 1)
+            rot = torch.exp(-1j * dw * tau_t[None]).to(dtype)  # (Fc,B,Nz,Nx)
+            x0 = st * rot[:, :, None]                          # (Fc,B,3,Nz,Nx)
+            del st, rot
+
         tk = time.time()
-        fields, its, rs = eng.solve(sp, tol=tol, max_iter=max_iter,
-                                    check_every=check_every,
-                                    cuda_graph=cuda_graph)
+        ret = eng.solve(sp, tol=tol, max_iter=max_iter,
+                        check_every=check_every, cuda_graph=cuda_graph,
+                        x0=x0, return_state=warm_start and is_anchor)
+        if warm_start and is_anchor:
+            fields, its, rs, st_out = ret
+            for j, p in enumerate(pos):
+                anchor_states[int(p)] = st_out[j]
+            del st_out
+        else:
+            fields, its, rs = ret
+        del x0
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         kernel_time += time.time() - tk
 
         # fields: (Fc, B, 3, nz, nx) = [ux, uz, p]
-        H_ux[chunk] = fields[:, :, 0, rz_t, rx_t].cpu().numpy()
-        H_uz[chunk] = fields[:, :, 1, rz_t, rx_t].cpu().numpy()
-        H_p[chunk] = fields[:, :, 2, rz_t, rx_t].cpu().numpy()
+        H_ux[bins] = fields[:, :, 0, rz_t, rx_t].cpu().numpy()
+        H_uz[bins] = fields[:, :, 1, rz_t, rx_t].cpu().numpy()
+        H_p[bins] = fields[:, :, 2, rz_t, rx_t].cpu().numpy()
         if Hfull is not None:
-            Hfull[i0:i0 + chunk.size] = fields[:, :, 2].cpu().numpy()
-        iters_all[i0:i0 + chunk.size] = its.numpy()
-        resid_all[i0:i0 + chunk.size] = rs.numpy()
+            Hfull[pos] = fields[:, :, 2].cpu().numpy()
+        iters_all[pos] = its.numpy()
+        resid_all[pos] = rs.numpy()
         del fields, eng
 
         if verbose:
-            print(f"  chunk {i0:3d}-{i0 + chunk.size - 1:3d}  "
-                  f"({freqs[chunk[0]]:5.2f}-{freqs[chunk[-1]]:5.2f} Hz)  "
+            tag = "anchors" if is_anchor else "fills  "
+            print(f"  {tag} {pos[0]:3d}-{pos[-1]:3d}  "
+                  f"({freqs[bins[0]]:5.2f}-{freqs[bins[-1]]:5.2f} Hz)  "
                   f"iters<={int(its.max()):5d}  "
                   f"max residual={rs.max().item():.1e}  "
                   f"elapsed={time.time() - wall0:6.1f}s", flush=True)
+    if warm_start:
+        anchor_states.clear()
 
     # ---- records: d(t) = irfft(W * H) (README convention #1) --------------
     def gathers(H):
@@ -301,6 +395,8 @@ def acoustic2d(
         max_residual=float(resid_all.max()),
         freq_batch=freq_batch,
         tol=tol,
+        warm_start=warm_start,
+        warm_stride=warm_stride if warm_start else None,
     )
     if verbose:
         print(f"[acoustic2d] done: kernel {kernel_time:.1f}s  "
